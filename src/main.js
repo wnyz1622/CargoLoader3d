@@ -24,6 +24,8 @@ window.addEventListener('unhandledrejection', (e) => {
     console.error('💥 PROMISE CRASH:', e.reason);
     alert('PROMISE ERROR: ' + e.reason);
 });
+//force rebuild
+console.log('App loaded:', new Date().toISOString());
 class HotspotManager {
     constructor() {
         this.init();
@@ -65,6 +67,8 @@ class HotspotManager {
         this.controlsChanged = true;
         this.lastCameraPosition = new THREE.Vector3();
         this.lastCameraQuaternion = new THREE.Quaternion();
+
+        this.hasLoggedRendererInfo = false;
     }
 
     async init() {
@@ -110,8 +114,8 @@ class HotspotManager {
         this.camera.position.set(0, 0, 0);
         this.camera.lookAt(0, 0, 0);
         //this.camera.setFocalLength(50);
-        
-        
+
+
         // Create renderer
         this.renderer = new WebGLRenderer({
             powerPreference: "high-performance",
@@ -127,8 +131,8 @@ class HotspotManager {
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         document.getElementById('container').appendChild(this.renderer.domElement);
-          
-        
+
+
 
         // Add WebGL context loss handler
         this.renderer.domElement.addEventListener('webglcontextlost', (event) => {
@@ -141,13 +145,13 @@ class HotspotManager {
         rightArrow.src = 'media/MouseControl.svg'; // adjust path if needed
         rightArrow.id = 'mouse-control';
         document.body.appendChild(rightArrow);
-        
+
         // 🔆 Enable tone mapping and adjust exposure
         this.renderer.toneMapping = THREE.LinearToneMapping; // or THREE.ReinhardToneMapping
         this.renderer.toneMappingExposure = 0.95; // adjust brightness here (try 1.2–2.0)
         this.renderer.outputEncoding = SRGBColorSpace;
         this.renderer.toneMapping = THREE.LinearToneMapping;
-        
+
 
         // Add lights
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
@@ -183,15 +187,15 @@ class HotspotManager {
             blendFunction: BlendFunction.ALPHA,
             edgeStrength: 2,
             pulseSpeed: 0.0,
-            visibleEdgeColor: new THREE.Color('#ef5337'), // Start transparent
-            hiddenEdgeColor: new THREE.Color('#ef5337'),
+            visibleEdgeColor: new THREE.Color('#2873F5'), // Start transparent
+            hiddenEdgeColor: new THREE.Color('#2873F5'),
             multisampling: 4,
             // resolution: {
             //     // width: window.innerWidth * Math.min(window.devicePixelRatio, 2),
             //     // height: window.innerHeight * Math.min(window.devicePixelRatio, 2)
             // },
             resolution: { width: window.innerWidth / 2, height: window.innerHeight / 2 },
-            
+
             xRay: false,
             // Edge detection settings
             patternTexture: null,
@@ -351,7 +355,7 @@ class HotspotManager {
             };
 
 
-            const modelPath = 'media/model/CargoLoader_v2.glb';
+            const modelPath = 'media/model/CargoLoader_v3.glb';
             console.log('Loading model from:', modelPath);
 
             // this.loader.load(modelPath, (gltf) => {
@@ -540,7 +544,7 @@ class HotspotManager {
                     this.controls.update();
                     // Create hotspots after model is loaded
                     this.createDefaultHotspots();
-                    
+
                     // In the model loading section, add this after loading the model:
                     this.model.traverse((node) => {
                         if (node.isMesh) {
@@ -656,22 +660,22 @@ class HotspotManager {
 
         if (meshToOutline) {
             const meshesToSelect = [];
-        
+
             // If the node is a group or has children, traverse it
             meshToOutline.traverse((child) => {
                 if (child.isMesh) {
                     meshesToSelect.push(child);
                 }
             });
-        
+
             // If it is a single mesh with multiple materials, still push it
             if (meshToOutline.isMesh && meshesToSelect.length === 0) {
                 meshesToSelect.push(meshToOutline);
             }
-        
+
             if (meshesToSelect.length > 0) {
                 this.outlineEffect.selection.set(meshesToSelect);
-                this.animateOutlineEdgeStrength(0, 5, 1500);
+                this.animateOutlineEdgeStrength(0, 3, 1500);
                 console.log('✔ Outline applied to:', meshesToSelect.map(m => m.name));
             } else {
                 console.warn('❌ No mesh found to apply outline for:', hotspotData.node);
@@ -1102,42 +1106,44 @@ class HotspotManager {
         this.cameraChanged = false;
         this.controlsChanged = false;
 
-        
-         // Always raycast every frame for more stable results
-    this.hotspots.forEach((hotspot) => {
-        // Get world position
-        const worldPosition = new THREE.Vector3();
-        hotspot.mesh.getWorldPosition(worldPosition);
 
-        // Project to screen coordinates
-        const screenPosition = worldPosition.clone().project(this.camera);
-        const isBehindCamera = screenPosition.z > 1;
-        const isInView = screenPosition.x >= -1 && screenPosition.x <= 1 &&
-                         screenPosition.y >= -1 && screenPosition.y <= 1;
+        // Always raycast every frame for more stable results
+        this.hotspots.forEach((hotspot) => {
+            // Get world position
+            const worldPosition = new THREE.Vector3();
+            hotspot.mesh.getWorldPosition(worldPosition);
 
-        const x = (screenPosition.x + 1) * window.innerWidth / 2;
-        const y = (-screenPosition.y + 1) * window.innerHeight / 2;
+            // Project to screen coordinates
+            const screenPosition = worldPosition.clone().project(this.camera);
+            const isBehindCamera = screenPosition.z > 1;
+            const isInView = screenPosition.x >= -1 && screenPosition.x <= 1 &&
+                screenPosition.y >= -1 && screenPosition.y <= 1;
 
-        // Raycast to detect occlusion
-        const direction = worldPosition.clone().sub(this.camera.position).normalize();
-        this.raycaster.set(this.camera.position, direction);
-        const intersects = this.raycaster.intersectObjects(this.interactiveMeshes, true);
-        const distanceToHotspot = this.camera.position.distanceTo(worldPosition);
-        const isOccluded = intersects.length > 0 && intersects[0].distance + 0.001 < distanceToHotspot;
+            const x = (screenPosition.x + 1) * window.innerWidth / 2;
+            const y = (-screenPosition.y + 1) * window.innerHeight / 2;
 
-        // Update visibility using opacity transition
-        const shouldShow = !(isBehindCamera || !isInView || isOccluded);
-        hotspot.element.style.opacity = shouldShow ? '1' : '0';
-        hotspot.element.style.pointerEvents = shouldShow ? 'auto' : 'none';
+            // Raycast to detect occlusion
+             //Increase the Tolerance to be less senstive, show less hidden callouts
 
-        // Position updates
-        hotspot.element.style.left = `${x}px`;
-        hotspot.element.style.top = `${y}px`;
+            const direction = worldPosition.clone().sub(this.camera.position).normalize();
+            this.raycaster.set(this.camera.position, direction);
+            const intersects = this.raycaster.intersectObjects(this.interactiveMeshes, true);
+            const distanceToHotspot = this.camera.position.distanceTo(worldPosition);
+            const isOccluded = intersects.length > 0 && intersects[0].distance + 0.1 < distanceToHotspot;
+            //Increase the Tolerance to be less senstive, show less hidden callouts
 
-        // Handle info panel
-        const showInfo = shouldShow && (hotspot === this.selectedHotspot || hotspot.element.matches(':hover'));
-        hotspot.info.style.opacity = showInfo ? '1' : '0';
-        hotspot.info.style.pointerEvents = showInfo ? 'auto' : 'none';
+            // Update visibility using opacity transition
+            const shouldShow = !(isBehindCamera || !isInView || isOccluded);
+            hotspot.element.style.opacity = shouldShow ? '1' : '0';
+            hotspot.element.style.pointerEvents = shouldShow ? 'auto' : 'none';
+
+            // Position updates
+            hotspot.element.style.left = `${x}px`;
+            hotspot.element.style.top = `${y}px`;
+
+            // Handle info panel
+            const showInfo = shouldShow && (hotspot === this.selectedHotspot || hotspot.element.matches(':hover'));
+            hotspot.info.style.display = showInfo ? 'block' : 'none';
 
 
             function isMobileView() {
@@ -1202,9 +1208,9 @@ class HotspotManager {
         button.addEventListener('click', () => {
             // Replace with the path to your PDF
             const pdfUrl = 'media/Commander Loader C15i Manual.pdf';
-            
+
             // Open in a new tab
-            window.open(pdfUrl, '_blank'); 
+            window.open(pdfUrl, '_blank');
         });
         // button.addEventListener('mouseenter', () => {
         //     icon.src = 'media/PDF_active.svg';
@@ -1275,9 +1281,9 @@ class HotspotManager {
         const modal = document.getElementById('specModal');
         const content = document.getElementById('specContent');
         const closeIcon = document.getElementById('closeSpecIcon');
-    
+
         let isVisible = false;
-    
+
         // Recursive renderer for nested spec objects
         const renderSpecs = (obj, container, level = 0) => {
             for (const [key, value] of Object.entries(obj)) {
@@ -1287,58 +1293,58 @@ class HotspotManager {
                     section.className = 'spec-section';
                     section.textContent = key;
                     container.appendChild(section);
-        
+
                     value.forEach(line => {
                         const item = document.createElement('div');
                         item.className = 'spec-item';
-        
+
                         const val = document.createElement('span');
                         val.className = 'spec-value';
                         val.textContent = line;
-        
+
                         item.appendChild(val);
                         container.appendChild(item);
                     });
-        
-                // Handle nested objects (like Models > Standard)
+
+                    // Handle nested objects (like Models > Standard)
                 } else if (typeof value === 'object' && value !== null) {
                     const section = document.createElement(level === 0 ? 'h2' : 'h3');
                     section.className = 'spec-section';
                     section.textContent = key;
                     container.appendChild(section);
-        
+
                     renderSpecs(value, container, level + 1);
-        
-                // Handle single key-value entries
+
+                    // Handle single key-value entries
                 } else {
                     const item = document.createElement('div');
                     item.className = 'spec-item';
-        
+
                     const label = document.createElement('span');
                     label.className = 'spec-label';
                     label.textContent = `${key}: `;
-        
+
                     const val = document.createElement('span');
                     val.className = 'spec-value';
                     val.textContent = value;
-        
+
                     item.appendChild(label);
                     item.appendChild(val);
                     container.appendChild(item);
                 }
             }
         };
-        
-    
+
+
         const showSpecs = async () => {
             try {
                 const response = await fetch('specs.json');
                 if (!response.ok) throw new Error('Failed to load specs.json');
-    
+
                 const specs = await response.json();
                 content.innerHTML = '';
                 renderSpecs(specs, content);
-    
+
                 modal.style.display = 'block';
                 icon.src = 'media/Spec_active.svg';
                 isVisible = true;
@@ -1350,13 +1356,13 @@ class HotspotManager {
                 console.error(err);
             }
         };
-    
+
         const hideSpecs = () => {
             modal.style.display = 'none';
             icon.src = 'media/Spec_default.svg';
             isVisible = false;
         };
-    
+
         button.addEventListener('click', () => {
             if (isVisible) {
                 hideSpecs();
@@ -1364,23 +1370,23 @@ class HotspotManager {
                 showSpecs();
             }
         });
-    
+
         closeIcon.addEventListener('click', hideSpecs);
-    
+
         button.addEventListener('mouseenter', () => {
             if (!isVisible) icon.src = 'media/Spec_active.svg';
         });
-    
+
         button.addEventListener('mouseleave', () => {
             if (!isVisible) icon.src = 'media/Spec_default.svg';
         });
     }
-    
+
 
 
     animate() {
         // Disable shadow and tone mapping on mobile for performance
-        
+
         // Pause rendering when page is hidden
         if (document.hidden) return;
         requestAnimationFrame(this.animate.bind(this));
@@ -1408,6 +1414,11 @@ class HotspotManager {
         //this.renderer.render(this.scene, this.camera);
         this.composer.render();
         this.stats.update();
+        //log render infno
+        if (!this.hasLoggedRendererInfo) {
+            console.log('📊 Final Renderer Info:', this.renderer.info);
+            this.hasLoggedRendererInfo = true;
+        }
     }
 
     animateOutlineEdgeStrength(start, end, duration, onComplete) {
@@ -1430,3 +1441,4 @@ class HotspotManager {
 
 // Initialize the application
 new HotspotManager();
+

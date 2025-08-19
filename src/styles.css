@@ -651,10 +651,9 @@ canvas {
 
 #mouse-control {
     position: fixed;
-    right: 24px;
-    top: 100px;
+    top: 60px;
     left: 50%;
-    transform: translateY(-50%);
+    transform: translate(-50%, 0);
     width: 100px;
     height: 90px;
     z-index: 1000;

@@ -94,5 +94,65 @@
     "title": "Extension Deck Control Panel",
     "camera": "Cam_16_ExtensionDeckControlPanel",
     "description": "Allows operator to control the conveys and rear stabilizers.  Warning lights will notify the operator if the convey system is faulty or if the stabilizers are not retracted properly."
+  },
+  {
+    "node": "17_ForwardScissors",
+    "title": "Forward Scissors",
+    "camera": "Cam_17_ForwardScissors",
+    "description": "The forward section of the scissor lift mechanism, connecting the front platform frame to the chassis and enabling vertical movement of the main deck."
+  },
+  {
+    "node": "18_RearScissors",
+    "title": "Rear Scissors",
+    "camera": "Cam_18_RearScissors",
+    "description": "The rear section of the scissor lift mechanism, providing structural support and synchronized lifting with the forward scissors."
+  },
+  {
+    "node": "19_BogieWheel",
+    "title": "Bogie Wheel",
+    "camera": "Cam_19_BogieWheel",
+    "description": "Support wheel assembly mounted beneath the main deck extension, designed to bear load weight and assist in alignment with the aircraft cargo door."
+  },
+  {
+    "node": "20_Stabilizer",
+    "title": "Stabilizer",
+    "camera": "Cam_20_Stabilizer",
+    "description": "Hydraulic stabilizer leg located at the rear of the chassis, deployed to the ground to prevent loader movement during loading and unloading."
+  },
+  {
+    "node": "21_SteerableDriveWheel",
+    "title": "Steerable Drive Wheel & Planetary Gear Hub",
+    "camera": "Cam_21_SteerableDriveWheel",
+    "description": "Front drive wheel assembly with integrated steering and planetary gear hub, providing traction, maneuverability, and torque distribution for loaded operations."
+  },
+  {
+    "node": "22_FoldingWing",
+    "title": "Folding Wing",
+    "camera": "Cam_22_FoldingWing",
+    "description": "Hinged platform extension that folds outward to guide Unit Load Devices (ULDs) into the aircraft, and folds back when not in use."
+  },
+  {
+    "node": "23_CylindricalRoller",
+    "title": "Cylindrical Roller",
+    "camera": "Cam_23_CylindricalRoller",
+    "description": "Non-powered roller with a smooth cylindrical surface mounted in the deck conveyor system to facilitate manual movement of containers and pallets."
+  },
+  {
+    "node": "24_LoadStop",
+    "title": "Load Stop",
+    "camera": "Cam_24_LoadStop",
+    "description": "Manually or hydraulically operated barrier at the deck edge to prevent ULDs from rolling off during positioning."
+  },
+  {
+    "node": "25_SideGuide",
+    "title": "Side Guide",
+    "camera": "Cam_25_SideGuide",
+    "description": "Raised guide rail positioned along the deck edge to keep ULDs centered during transfer."
+  },
+  {
+    "node": "26_HelirollClusterAssembly",
+    "title": "Heliroll Cluster Assembly",
+    "camera": "Cam_26_HelirollClusterAssembly",
+    "description": "Powered multi-directional roller cluster used to position and rotate ULDs precisely on the main deck."
   }
 ]
