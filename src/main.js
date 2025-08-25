@@ -15,6 +15,12 @@ function isMobile() {
 }
 
 const IS_MOBILE = isMobile();
+
+// Performance monitoring
+let frameCount = 0;
+let lastTime = performance.now();
+let fps = 60;
+
 window.addEventListener('error', (e) => {
     console.error('💥 CRASH DETECTED:', e.message);
     alert('CRASH: ' + e.message + ' at line ' + e.lineno);
@@ -24,7 +30,7 @@ window.addEventListener('unhandledrejection', (e) => {
     console.error('💥 PROMISE CRASH:', e.reason);
     alert('PROMISE ERROR: ' + e.reason);
 });
-//force rebuild
+
 console.log('App loaded:', new Date().toISOString());
 class HotspotManager {
     constructor() {
@@ -41,32 +47,22 @@ class HotspotManager {
         this.isAnimating = false;
         this.needsUpdate = false;
         this.frameCount = 0;
+        
         // Performance settings
-        this.LOD_DISTANCE = 10;
-        this.CULL_DISTANCE = 50;
-        this.targetFPS = 60;
-        // Raycast optimization
-        this.raycastThrottle = 0;
-        this.raycastInterval = 3; // Only raycast every 3 frames
-        this.lastRaycastResults = new Map();
-        this.raycastCache = new Map();
-        this.cacheTimeout = 500; // Cache results for 500ms
+        this.LOD_DISTANCE = IS_MOBILE ? 15 : 10;
+        this.CULL_DISTANCE = IS_MOBILE ? 30 : 50;
+        this.targetFPS = IS_MOBILE ? 30 : 60;
+        
+        // Simple raycast optimization
+        this.raycastFrameCount = 0;
+        this.raycastInterval = IS_MOBILE ? 8 : 5; // Check occlusion every N frames
+        this.lastOcclusionResults = new Map(); // Simple cache for smoother transitions
 
-        // Frustum culling
-        this.frustum = new THREE.Frustum();
-        this.cameraMatrix = new THREE.Matrix4();
-
-        // Object pooling for raycaster
+        // Object pooling
         this.raycaster = new THREE.Raycaster();
         this.tempVector = new THREE.Vector3();
         this.tempVector2 = new THREE.Vector3();
         this.tempMatrix = new THREE.Matrix4();
-
-        // Track camera/controls changes for hotspot update
-        this.cameraChanged = true;
-        this.controlsChanged = true;
-        this.lastCameraPosition = new THREE.Vector3();
-        this.lastCameraQuaternion = new THREE.Quaternion();
 
         this.hasLoggedRendererInfo = false;
 
@@ -78,36 +74,30 @@ class HotspotManager {
         this.scene = new THREE.Scene();
         this.clock = new THREE.Clock();
 
+        // Optimized HDR loading
         const rgbeLoader = new RGBELoader();
         rgbeLoader.load('media/model/cannon_1k.hdr', (hdrTexture) => {
             hdrTexture.mapping = THREE.EquirectangularReflectionMapping;
-            // Set filtering for environment map
-            if (hdrTexture.minFilter !== undefined) hdrTexture.minFilter = THREE.LinearMipmapLinearFilter;
-            if (hdrTexture.magFilter !== undefined) hdrTexture.magFilter = THREE.LinearFilter;
+            // Optimized filtering
+            hdrTexture.minFilter = THREE.LinearFilter;
+            hdrTexture.magFilter = THREE.LinearFilter;
+            hdrTexture.generateMipmaps = false; // Disable mipmaps for HDR
             hdrTexture.needsUpdate = true;
             this.scene.environment = hdrTexture;
-            //this.scene.background = hdrTexture;
-            //this.scene.background = new THREE.Color(0xf0f0f0);
         });
 
-        // const bgLoader = new THREE.TextureLoader();
-        // bgLoader.load('media/model/GradientBackground_2.png', (bgTexture) => {
-        //     // Set filtering for background texture
-        //     if (bgTexture.minFilter !== undefined) bgTexture.minFilter = THREE.LinearMipmapLinearFilter;
-        //     if (bgTexture.magFilter !== undefined) bgTexture.magFilter = THREE.LinearFilter;
-        //     bgTexture.needsUpdate = true;
-        //     this.scene.background = bgTexture; // ✅ visible background
-        // });
+        // Optimized gradient background
         const gradientCanvas = document.createElement('canvas');
         gradientCanvas.width = 1;
-        gradientCanvas.height = 256;
+        gradientCanvas.height = IS_MOBILE ? 128 : 256; // Smaller on mobile
         const ctx = gradientCanvas.getContext('2d');
         const gradient = ctx.createLinearGradient(0, 0, 0, 256);
         gradient.addColorStop(0, '#7C7C7C'); // bottom - white
         gradient.addColorStop(1, '#ffffff'); // top - light grey
         ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, 1, 256);
+        ctx.fillRect(0, 0, 1, gradientCanvas.height);
         const gradientTexture = new THREE.CanvasTexture(gradientCanvas);
+        gradientTexture.generateMipmaps = false;
         this.scene.background = gradientTexture;
 
         // Create camera (fov, aspect, near, far)
@@ -117,50 +107,52 @@ class HotspotManager {
         //this.camera.setFocalLength(50);
 
 
-        // Create renderer
+        // Highly optimized renderer
         this.renderer = new WebGLRenderer({
             powerPreference: "high-performance",
-            antialias: window.devicePixelRatio <= 1,
+            antialias: !IS_MOBILE && window.devicePixelRatio <= 1,
             stencil: false,
             depth: true,
             alpha: false,
-            //preserveDrawingBuffer: false
+            preserveDrawingBuffer: false,
+            failIfMajorPerformanceCaveat: false
         });
+        
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(1);
-        this.renderer.outputEncoding = SRGBColorSpace;
-        this.renderer.shadowMap.enabled = true;
-        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        this.renderer.setPixelRatio(IS_MOBILE ? 1 : Math.min(window.devicePixelRatio, 2));
+        this.renderer.outputColorSpace = SRGBColorSpace;
+        
+        // Conditional shadows and tone mapping
+        if (!IS_MOBILE) {
+            this.renderer.shadowMap.enabled = true;
+            this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            this.renderer.toneMapping = THREE.LinearToneMapping;
+            this.renderer.toneMappingExposure = 0.95;
+        } else {
+            this.renderer.shadowMap.enabled = false;
+            this.renderer.toneMapping = THREE.NoToneMapping;
+        }
         document.getElementById('container').appendChild(this.renderer.domElement);
 
-
-
-        // Add WebGL context loss handler
+        // WebGL context loss handler
         this.renderer.domElement.addEventListener('webglcontextlost', (event) => {
             event.preventDefault();
             alert('WebGL context lost. Please reload the page.');
         }, false);
 
-        // Add right-center SVG arrow
+        // UI elements
         const rightArrow = document.createElement('img');
-        rightArrow.src = 'media/MouseControl.svg'; // adjust path if needed
+        rightArrow.src = 'media/MouseControl.svg';
         rightArrow.id = 'mouse-control';
         document.body.appendChild(rightArrow);
 
-        // 🔆 Enable tone mapping and adjust exposure
-        this.renderer.toneMapping = THREE.LinearToneMapping; // or THREE.ReinhardToneMapping
-        this.renderer.toneMappingExposure = 0.95; // adjust brightness here (try 1.2–2.0)
-        this.renderer.outputEncoding = SRGBColorSpace;
-        this.renderer.toneMapping = THREE.LinearToneMapping;
-
-
-        // Add lights
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+        // Optimized lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, IS_MOBILE ? 0.5 : 0.3);
         this.scene.add(ambientLight);
 
         const directionalLight = new THREE.DirectionalLight(0xffffff, 2);
-        directionalLight.position.set(0, 25, 0);
-        directionalLight.intensity = 1; // more shadow strength
+        directionalLight.position.set(0, 10, 0);
+        directionalLight.intensity = 1.75; // more shadow strength
         directionalLight.castShadow = true;
 
         // Add these shadow properties
@@ -170,10 +162,10 @@ class HotspotManager {
         directionalLight.shadow.bias = -0.001;
         directionalLight.shadow.camera.near = 0.5;
         directionalLight.shadow.camera.far = 100;
-        directionalLight.shadow.camera.left = -30;
-        directionalLight.shadow.camera.right = 30;
-        directionalLight.shadow.camera.top = 30;
-        directionalLight.shadow.camera.bottom = -30;
+        directionalLight.shadow.camera.left = -25;
+        directionalLight.shadow.camera.right = 25;
+        directionalLight.shadow.camera.top = 25;
+        directionalLight.shadow.camera.bottom = -25;
         directionalLight.shadow.normalBias = 0.02;
         this.scene.add(directionalLight);
         //composer
@@ -215,7 +207,7 @@ class HotspotManager {
         this.composer.addPass(effectPass);
 
         // Add floor disc
-        const floorGeometry = new THREE.CircleGeometry(10, 48);
+        const floorGeometry = new THREE.CircleGeometry(8, 48);
         const floorMaterial = new THREE.MeshStandardMaterial({
             color: 0xbbbbbb,
             transparent: true,
@@ -225,18 +217,16 @@ class HotspotManager {
             side: THREE.DoubleSide
         });
         const floor = new THREE.Mesh(floorGeometry, floorMaterial);
-        floor.rotation.x = -Math.PI / 2; // Rotate to be horizontal
-        floor.position.y = -2.5; // Position lower below the model
-        floor.position.z = 0;
-        floor.position.x = 0;
-        floor.receiveShadow = true;
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.y = -2.5;
+        floor.receiveShadow = !IS_MOBILE;
         this.scene.add(floor);
 
         // Add controls
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-        this.controls.enableDamping = true; // Enable smooth camera motion
-        this.controls.dampingFactor = 0.15; // Increase damping for smoother stop
-        this.controls.zoomSpeed = 2.0; // Increase zoom speed
+        this.controls.enableDamping = true;
+        this.controls.dampingFactor = IS_MOBILE ? 0.05 : 0.15; // Less damping on mobile for responsiveness
+        this.controls.zoomSpeed = 2.0;
         this.controls.enablePan = false;
         this.controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
         this.controls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
@@ -246,7 +236,7 @@ class HotspotManager {
         this.controls.minDistance = 0.1; // Minimum zoom distance
         this.controls.maxDistance = 12; // Maximum zoom distance
         this.controls.minPolarAngle = Math.PI / 6; // Minimum vertical angle (30 degrees)
-        this.controls.maxPolarAngle = Math.PI; // Maximum vertical angle (120 degrees)
+        this.controls.maxPolarAngle = Math.PI / 2; // Maximum vertical angle (120 degrees)
         // this.controls.minAzimuthAngle = -Math.PI; // Allow full 360 rotation
         //this.controls.maxAzimuthAngle = Math.PI;
         this.controls.enablePan = true; // Disable panning to keep focus on the model
@@ -256,10 +246,17 @@ class HotspotManager {
             if (this.controls.target.y < -2.5) {
                 this.controls.target.y = -2.5;
             }
-        });
-        // Track camera/controls changes for hotspot update
-        this.controls.addEventListener('change', () => {
             this.controlsChanged = true;
+            
+            // Throttle updates on mobile
+            if (IS_MOBILE) {
+                if (controlsUpdateTimeout) clearTimeout(controlsUpdateTimeout);
+                controlsUpdateTimeout = setTimeout(() => {
+                    this.cameraChanged = true;
+                }, 50);
+            } else {
+                this.cameraChanged = true;
+            }
         });
 
         // Setup loaders
@@ -280,36 +277,28 @@ class HotspotManager {
                         </div>
                     `;
         }
+        // Event listeners with debouncing
         window.addEventListener('orientationchange', () => {
             this.onWindowResize();
-            setTimeout(() => this.onWindowResize(), 500); // double fire for safety
+            setTimeout(() => this.onWindowResize(), 500);
         });
-        // Add event listeners
-        // Debounced resize handler
+
         let resizeTimeout = null;
         window.addEventListener('resize', () => {
             if (resizeTimeout) clearTimeout(resizeTimeout);
             resizeTimeout = setTimeout(() => {
                 this.onWindowResize();
-                this.cameraChanged = true;
-                this.controlsChanged = true;
             }, 100);
         });
         this.setupFullscreenButton();
-        this.setupTechSpecToggle();
         this.setupResetButton();
-        this.setupPDFButton();
 
-        //test outliene box
-        // const test = new THREE.Mesh(
-        //     new THREE.BoxGeometry(1, 1, 1),
-        //     new THREE.MeshStandardMaterial({ color: 0x00ff00 })
-        // );
-        // this.scene.add(test);
-        // this.outlineEffect.selection.set([test]);
-        this.stats = new Stats();
-        //hide fps on screen
-        //document.body.appendChild(this.stats.dom);
+        // Performance monitoring setup
+        if (!IS_MOBILE) {
+            this.stats = new Stats();
+            // Uncomment to show FPS counter
+            // document.body.appendChild(this.stats.dom);
+        }
         // Start animation loop
         this.clock = new THREE.Clock();
         this.animate();
@@ -420,30 +409,17 @@ class HotspotManager {
                         console.log('✅ Material Variants Found:', this.variantList);
                     }
 
-                    // Log all nodes in the model with their positions
-                    console.log('=== Available Nodes in Model ===');
+                    // Optimized model traversal - combine multiple operations
+                    this.interactiveMeshes = [];
                     const nodePositions = {};
                     const targetNodes = ['Main_FrontView', 'Main_RearView', 'Main_LeftView', 'Main_RightView', '01_ChargingSocket'];
 
                     this.model.traverse((node) => {
-                        if (node.isMesh || node.isObject3D) {
-                            const position = new THREE.Vector3();
-                            node.getWorldPosition(position);
-                            nodePositions[node.name] = {
-                                name: node.name,
-                                type: node.type,
-                                position: position
-                            };
-
-                            // Log all nodes
-                            console.log(`Node: "${node.name}" (Type: ${node.type}) Position:`, position);
-
-                            // Specifically log target nodes if found
-                            if (targetNodes.includes(node.name)) {
-                                console.log('Found target node:', {
-                                    name: node.name,
-                                    position: position
-                                });
+                        // Handle meshes
+                        if (node.isMesh) {
+                            // Add to interactive meshes if visible
+                            if (node.visible) {
+                                this.interactiveMeshes.push(node);
                             }
                             //triangle counts
                             // let triangleCount = 0;
@@ -482,14 +458,6 @@ class HotspotManager {
                     console.log('============================');
 
                     this.scene.add(this.model);
-
-                    // Hide all "_open" / ".open" nodes by default so doors start CLOSED
-                    this.model.traverse(o => {
-                        if (!o || !o.name) return;
-                        if (/(\.|_)open$/i.test(o.name)) o.visible = false;  // hide "open"
-                        // don't force "close" visible here; base/closed nodes are already visible by default
-                    });
-
 
                     // Set texture filtering for all textures in model materials
                     this.model.traverse((node) => {
@@ -555,20 +523,6 @@ class HotspotManager {
                     this.controls.update();
                     // Create hotspots after model is loaded
                     this.createDefaultHotspots();
-
-                    // In the model loading section, add this after loading the model:
-                    this.model.traverse((node) => {
-                        if (node.isMesh) {
-                            node.castShadow = true;
-                            node.receiveShadow = true;
-
-                            // Make sure materials are set up for shadows
-                            if (node.material) {
-                                node.material.shadowSide = THREE.FrontSide;
-                                node.material.needsUpdate = true;
-                            }
-                        }
-                    });
 
                     resolve();
                 },
@@ -996,6 +950,10 @@ class HotspotManager {
 
             const infoDiv = document.createElement('div');
             infoDiv.className = 'hotspot-info';
+            infoDiv.style.position = 'absolute';
+            infoDiv.style.display = 'none'; // Start hidden
+            infoDiv.style.left = '-9999px'; // Start off-screen to prevent flicker
+            infoDiv.style.top = '-9999px';
             infoDiv.innerHTML = `
            
              <img class="closeSpecIcon" src="media/Close.png" alt="Close" />
@@ -1064,9 +1022,7 @@ class HotspotManager {
                         : `url('media/Info_Selected.png')`;
                 }
 
-                if (hotspotData.type !== 'animation') {
-                    infoDiv.style.display = 'block';
-                }
+                infoDiv.style.display = 'block';
             });
 
             hotspotDiv.addEventListener('mouseleave', () => {
@@ -1082,10 +1038,6 @@ class HotspotManager {
                     hotspotDiv.style.backgroundImage = hotspotData.type === "animation"
                         ? `url('media/door_default.png')`
                         : `url('media/Info_default.png')`;
-                }
-
-                if (this.selectedHotspot !== hotspot) {
-                    infoDiv.style.display = 'none';
                 }
             });
         });
@@ -1104,12 +1056,7 @@ class HotspotManager {
 
 
         // Ensure hotspots are visible by default after all are created
-        this.cameraChanged = false;
-        this.controlsChanged = true;
         this.updateHotspotPositions();
-        if (!IS_MOBILE) {
-            this.updateHotspotPositions();
-        }
 
     }
 
@@ -1239,29 +1186,95 @@ class HotspotManager {
     //     animate();
     // }
 
+    setupPostprocessing() {
+        this.composer = new EffectComposer(this.renderer);
+        this.composer.addPass(new RenderPass(this.scene, this.camera));
+
+        // Optimized outline effect
+        this.outlineEffect = new OutlineEffect(this.scene, this.camera, {
+            selection: [],
+            blendFunction: BlendFunction.ALPHA,
+            edgeStrength: 2,
+            pulseSpeed: 0.0,
+            visibleEdgeColor: new THREE.Color('#2873F5'),
+            hiddenEdgeColor: new THREE.Color('#2873F5'),
+            multisampling: 2, // Reduced from 4
+            resolution: { 
+                width: window.innerWidth / 2, 
+                height: window.innerHeight / 2 
+            },
+            xRay: false,
+            kernelSize: 1,
+            blur: true,
+            edgeGlow: 0.0,
+            usePatternTexture: false
+        });
+
+        const smaaEffect = new SMAAEffect();
+        const effectPass = new EffectPass(this.camera, this.outlineEffect, smaaEffect);
+        effectPass.renderToScreen = true;
+        this.composer.addPass(effectPass);
+    }
+
+    // Optimized animation loop
+    animate() {
+        requestAnimationFrame(this.animate.bind(this));
+        this.controls.update();
+
+        // Update hotspot positions
+        this.updateHotspotPositions();
+
+        // Update animations
+        if (this.mixer) {
+            const delta = this.clock.getDelta();
+            this.mixer.update(delta);
+        }
+
+        // Render using composer (postprocessing) if not mobile, otherwise direct render
+        if (!IS_MOBILE && this.composer) {
+            this.composer.render();
+        } else {
+            this.renderer.render(this.scene, this.camera);
+        }
+
+        // Performance monitoring
+        if (!IS_MOBILE && this.stats) {
+            this.stats.update();
+        }
+
+        // Log renderer info once
+        if (!this.hasLoggedRendererInfo) {
+            console.log('📊 Renderer Info:', this.renderer.info);
+            this.hasLoggedRendererInfo = true;
+        }
+    }
+
+    animateOutlineEdgeStrength(start, end, duration, onComplete) {
+        if (!this.outlineEffect) return;
+        const startTime = performance.now();
+        const animate = () => {
+            const now = performance.now();
+            const t = Math.min((now - startTime) / duration, 1);
+            this.outlineEffect.edgeStrength = start + (end - start) * t;
+            if (t < 1) {
+                requestAnimationFrame(animate);
+            } else {
+                this.outlineEffect.edgeStrength = end;
+                if (onComplete) onComplete();
+            }
+        };
+        animate();
+    }
+
     updateHotspotPositions() {
         if (!this.hotspots) return;
 
-        // Only update if camera or controls have changed
-        const camPos = this.camera.position;
-        const camQuat = this.camera.quaternion;
-        if (
-            !this.cameraChanged &&
-            !this.controlsChanged &&
-            camPos.equals(this.lastCameraPosition) &&
-            camQuat.equals(this.lastCameraQuaternion)
-        ) {
-            return;
-        }
-        this.lastCameraPosition.copy(camPos);
-        this.lastCameraQuaternion.copy(camQuat);
-        this.cameraChanged = false;
-        this.controlsChanged = false;
+        // Increment frame counter for raycast throttling
+        this.raycastFrameCount++;
+        const shouldRaycast = this.raycastFrameCount >= this.raycastInterval;
+        if (shouldRaycast) this.raycastFrameCount = 0;
 
-
-        // Always raycast every frame for more stable results
         this.hotspots.forEach((hotspot) => {
-            // Get world position
             const worldPosition = new THREE.Vector3();
             hotspot.mesh.getWorldPosition(worldPosition);
 
@@ -1275,33 +1288,34 @@ class HotspotManager {
             const y = (-screenPosition.y + 1) * window.innerHeight / 2;
 
             // Raycast to detect occlusion
-            //Increase the Tolerance to be less senstive, show less hidden callouts
+             //Increase the Tolerance to be less senstive, show less hidden callouts
 
             const direction = worldPosition.clone().sub(this.camera.position).normalize();
             this.raycaster.set(this.camera.position, direction);
             const intersects = this.raycaster.intersectObjects(this.interactiveMeshes, true);
             const distanceToHotspot = this.camera.position.distanceTo(worldPosition);
-            const isOccluded = intersects.length > 0 && intersects[0].distance + 0.01 < distanceToHotspot;
+            const isOccluded = intersects.length > 0 && intersects[0].distance + 0.1 < distanceToHotspot;
             //Increase the Tolerance to be less senstive, show less hidden callouts
 
             // Update visibility using opacity transition
             const shouldShow = !(isBehindCamera || !isInView || isOccluded);
+            
+            // Clean on/off visibility - no transparency
             hotspot.element.style.opacity = shouldShow ? '1' : '0';
             hotspot.element.style.pointerEvents = shouldShow ? 'auto' : 'none';
 
-            // Position updates
-            hotspot.element.style.left = `${x}px`;
-            hotspot.element.style.top = `${y}px`;
-
-            // Handle info panel
-            // Handle info panel (never for animation hotspots)
-            if (hotspot.data.type === 'animation') {
-                hotspot.info.style.display = 'none';
-            } else {
-                const showInfo = shouldShow && (hotspot === this.selectedHotspot || hotspot.element.matches(':hover'));
-                hotspot.info.style.display = showInfo ? 'block' : 'none';
+            // Update position only if significantly changed (reduce DOM updates)
+            const currentLeft = parseInt(hotspot.element.style.left) || 0;
+            const currentTop = parseInt(hotspot.element.style.top) || 0;
+            
+            if (Math.abs(currentLeft - x) > 1 || Math.abs(currentTop - y) > 1) {
+                hotspot.element.style.left = `${x}px`;
+                hotspot.element.style.top = `${y}px`;
             }
 
+            // Handle info panel
+            const showInfo = shouldShow && (hotspot === this.selectedHotspot || hotspot.element.matches(':hover'));
+            hotspot.info.style.display = showInfo ? 'block' : 'none';
 
 
             function isMobileView() {
@@ -1330,270 +1344,153 @@ class HotspotManager {
         this.camera.aspect = window.innerWidth / window.innerHeight;
         this.camera.updateProjectionMatrix();
 
-        const pixelRatio = Math.min(window.devicePixelRatio, 2);
+        const pixelRatio = IS_MOBILE ? 1 : Math.min(window.devicePixelRatio, 2);
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(1); // or just 1.0 for testing
+        this.renderer.setPixelRatio(pixelRatio);
 
-
-        // Update composer
-        this.composer.setSize(window.innerWidth, window.innerHeight);
-        //this.composer.setPixelRatio(pixelRatio); // This line was causing the error
-
-        // Update outline effect resolution with proper scaling
-        if (this.outlineEffect && this.outlineEffect.resolution) {
-            this.outlineEffect.resolution.width = window.innerWidth * pixelRatio;
-            this.outlineEffect.resolution.height = window.innerHeight * pixelRatio;
-
-            // Force update of internal render targets
-            this.outlineEffect.setSize(window.innerWidth * pixelRatio, window.innerHeight * pixelRatio);
+        // Update composer if exists
+        if (this.composer) {
+            this.composer.setSize(window.innerWidth, window.innerHeight);
+            
+            // Update outline effect resolution
+            if (this.outlineEffect && this.outlineEffect.resolution) {
+                this.outlineEffect.resolution.width = window.innerWidth * pixelRatio;
+                this.outlineEffect.resolution.height = window.innerHeight * pixelRatio;
+                this.outlineEffect.setSize(window.innerWidth * pixelRatio, window.innerHeight * pixelRatio);
+            }
         }
     }
 
     setupFullscreenButton() {
         const button = document.getElementById('fullscreenBtn');
+        if (!button) {
+            console.warn('Fullscreen button not found');
+            return;
+        }
+        
+        const icon = button.querySelector('img');
+        
         button.addEventListener('click', () => {
             if (!document.fullscreenElement) {
-                document.documentElement.requestFullscreen();
+                document.documentElement.requestFullscreen().catch(err => {
+                    console.error('Error attempting to enable fullscreen:', err);
+                });
             } else {
                 document.exitFullscreen();
             }
         });
-    }
-    setupPDFButton() {
-        const button = document.getElementById('pdfBtn');
-        const icon = document.getElementById('pdfIcon');
 
-        button.addEventListener('click', () => {
-            // Replace with the path to your PDF
-            const pdfUrl = 'media/Commander Loader C15i Manual.pdf';
-
-            // Open in a new tab
-            window.open(pdfUrl, '_blank');
+        // Update button icon on fullscreen state change
+        document.addEventListener('fullscreenchange', () => {
+            if (icon) {
+                icon.src = document.fullscreenElement 
+                    ? 'media/Fullscreen_acitve.svg'
+                    : 'media/Fullscreen_default.svg';
+            }
         });
-        // button.addEventListener('mouseenter', () => {
-        //     icon.src = 'media/PDF_active.svg';
-        // });
+
+        // Hover effects
+        button.addEventListener('mouseenter', () => {
+            if (icon && !document.fullscreenElement) {
+                icon.src = 'media/Fullscreen_acitve.svg';
+            }
+        });
 
         button.addEventListener('mouseleave', () => {
-            icon.src = 'media/PDF_default.svg';
+            if (icon && !document.fullscreenElement) {
+                icon.src = 'media/Fullscreen_default.svg';
+            }
         });
     }
+
     setupResetButton() {
         const button = document.getElementById('resetBtn');
+        if (!button) {
+            console.warn('Reset button not found');
+            return;
+        }
+        
         const icon = document.getElementById('resetIcon');
 
         button.addEventListener('click', () => {
             console.log('🔄 Resetting view...');
 
-            // Enforce reset to a comfortable distance and allow zooming
-            const targetPos = this.initialCameraPosition.clone();
-            const targetTarget = new THREE.Vector3(0.2, 0, 0);
-            const startPos = this.camera.position.clone();
-            const startTarget = this.controls.target.clone();
-            const duration = 2000;
-            const startTime = Date.now();
-            const animateReset = () => {
-                const elapsed = Date.now() - startTime;
-                const t = Math.min(elapsed / duration, 1);
-                const ease = 1 - Math.pow(1 - t, 4);
-                this.camera.position.lerpVectors(startPos, targetPos, ease);
-                this.controls.target.lerpVectors(startTarget, targetTarget, ease);
-                this.controls.update();
-                if (t < 1) {
-                    requestAnimationFrame(animateReset);
-                } else {
+            // Reset camera to initial position with smooth animation
+            if (this.initialCameraPosition && this.initialCameraTarget) {
+                const targetPos = this.initialCameraPosition.clone();
+                const targetTarget = this.initialCameraTarget.clone();
+                const startPos = this.camera.position.clone();
+                const startTarget = this.controls.target.clone();
+                const duration = 2000;
+                const startTime = Date.now();
+                
+                const animateReset = () => {
+                    const elapsed = Date.now() - startTime;
+                    const t = Math.min(elapsed / duration, 1);
+                    const ease = 1 - Math.pow(1 - t, 4);
+                    this.camera.position.lerpVectors(startPos, targetPos, ease);
+                    this.controls.target.lerpVectors(startTarget, targetTarget, ease);
                     this.controls.update();
-                }
-            };
-            animateReset();
+                    if (t < 1) {
+                        requestAnimationFrame(animateReset);
+                    }
+                };
+                animateReset();
+            }
 
-            // Reset material variant
-            this.applyMaterialVariant('00_Default');
-            this.outlineEffect.selection.clear();
-            // Hide any open callout
+            // Clear any selected hotspot
             if (this.selectedHotspot) {
-                this.selectedHotspot.info.classList.remove('active');
+                this.selectedHotspot.element.style.backgroundImage = 
+                    this.selectedHotspot.data.type === 'animation'
+                        ? `url('media/door_visited.png')`
+                        : `url('media/Info_visited.png')`;
                 this.selectedHotspot.info.style.display = 'none';
-                this.selectedHotspot.element.style.backgroundImage = `url('media/Info_visited.png')`;
+                this.selectedHotspot.info.classList.remove('active');
                 this.selectedHotspot = null;
             }
 
+            // Clear outline effect
+            if (this.outlineEffect && this.outlineEffect.selection) {
+                this.outlineEffect.selection.clear();
+            }
+
+            // Reset navigation state
+            this.currentHotspotIndex = -1;
+            const titleDisplay = document.getElementById('currentHotspotTitle');
+            if (titleDisplay) {
+                titleDisplay.textContent = "Click a hotspot or use arrows";
+            }
+
+            // Clear camera button states
+            document.querySelectorAll(".cam-btn-container.active").forEach(el => {
+                el.classList.remove("active");
+            });
+
+            // Reset material variant if method exists
+            if (typeof this.applyMaterialVariant === 'function') {
+                this.applyMaterialVariant('00_Default');
+            }
+
             // Reset button icon after click
-            setTimeout(() => {
+            if (icon) {
+                setTimeout(() => {
+                    icon.src = 'media/Reset_default.svg';
+                }, 150);
+            }
+        });
+
+        // Hover effects
+        button.addEventListener('mouseenter', () => {
+            if (icon) {
+                icon.src = 'media/Reset_active.svg';
+            }
+        });
+
+        button.addEventListener('mouseleave', () => {
+            if (icon) {
                 icon.src = 'media/Reset_default.svg';
-            }, 150);
-        });
-
-        button.addEventListener('mouseenter', () => {
-            icon.src = 'media/Reset_active.svg';
-        });
-
-        button.addEventListener('mouseleave', () => {
-            icon.src = 'media/Reset_default.svg';
-        });
-    }
-
-    setupTechSpecToggle() {
-        const button = document.getElementById('techSpecBtn');
-        const icon = document.getElementById('techSpecIcon');
-        const modal = document.getElementById('specModal');
-        const content = document.getElementById('specContent');
-        const closeIcon = document.getElementById('closeSpecIcon');
-
-        let isVisible = false;
-
-        // Recursive renderer for nested spec objects
-        const renderSpecs = (obj, container, level = 0) => {
-            for (const [key, value] of Object.entries(obj)) {
-                // Handle arrays (like Power Module, Electrical, etc.)
-                if (Array.isArray(value)) {
-                    const section = document.createElement(level === 0 ? 'h2' : 'h3');
-                    section.className = 'spec-section';
-                    section.textContent = key;
-                    container.appendChild(section);
-
-                    value.forEach(line => {
-                        const item = document.createElement('div');
-                        item.className = 'spec-item';
-
-                        const val = document.createElement('span');
-                        val.className = 'spec-value';
-                        val.textContent = line;
-
-                        item.appendChild(val);
-                        container.appendChild(item);
-                    });
-
-                    // Handle nested objects (like Models > Standard)
-                } else if (typeof value === 'object' && value !== null) {
-                    const section = document.createElement(level === 0 ? 'h2' : 'h3');
-                    section.className = 'spec-section';
-                    section.textContent = key;
-                    container.appendChild(section);
-
-                    renderSpecs(value, container, level + 1);
-
-                    // Handle single key-value entries
-                } else {
-                    const item = document.createElement('div');
-                    item.className = 'spec-item';
-
-                    const label = document.createElement('span');
-                    label.className = 'spec-label';
-                    label.textContent = `${key}: `;
-
-                    const val = document.createElement('span');
-                    val.className = 'spec-value';
-                    val.textContent = value;
-
-                    item.appendChild(label);
-                    item.appendChild(val);
-                    container.appendChild(item);
-                }
-            }
-        };
-
-
-        const showSpecs = async () => {
-            try {
-                const response = await fetch('specs.json');
-                if (!response.ok) throw new Error('Failed to load specs.json');
-
-                const specs = await response.json();
-                content.innerHTML = '';
-                renderSpecs(specs, content);
-
-                modal.style.display = 'block';
-                icon.src = 'media/Spec_active.svg';
-                isVisible = true;
-            } catch (err) {
-                content.innerHTML = '<p>Error loading specs.</p>';
-                modal.style.display = 'block';
-                icon.src = 'media/Spec_active.svg';
-                isVisible = true;
-                console.error(err);
-            }
-        };
-
-        const hideSpecs = () => {
-            modal.style.display = 'none';
-            icon.src = 'media/Spec_default.svg';
-            isVisible = false;
-        };
-
-        button.addEventListener('click', () => {
-            if (isVisible) {
-                hideSpecs();
-            } else {
-                showSpecs();
             }
         });
-
-        closeIcon.addEventListener('click', hideSpecs);
-
-        button.addEventListener('mouseenter', () => {
-            if (!isVisible) icon.src = 'media/Spec_active.svg';
-        });
-
-        button.addEventListener('mouseleave', () => {
-            if (!isVisible) icon.src = 'media/Spec_default.svg';
-        });
-    }
-
-
-
-    animate() {
-        // Disable shadow and tone mapping on mobile for performance
-
-        // Pause rendering when page is hidden
-        if (document.hidden) return;
-        requestAnimationFrame(this.animate.bind(this));
-        this.controls.update();
-
-        // Only update hotspot positions if camera or controls changed
-        if (this.cameraChanged || this.controlsChanged) {
-            this.updateHotspotPositions();
-            this.cameraChanged = false;
-            this.controlsChanged = false;
-        }
-
-        // Update animations
-        if (this.mixer) {
-            const delta = this.clock.getDelta();
-            this.mixer.update(delta);
-        }
-
-        //Render using composer (postprocessing effects) if not mobile
-        // if (!IS_MOBILE && this.composer) {
-        //     this.composer.render();
-        // } else {
-        //     this.renderer.render(this.scene, this.camera);
-        // }
-        //this.renderer.render(this.scene, this.camera);
-        this.composer.render();
-        this.stats.update();
-        //log render infno
-        if (!this.hasLoggedRendererInfo) {
-            console.log('📊 Final Renderer Info:', this.renderer.info);
-            this.hasLoggedRendererInfo = true;
-        }
-    }
-
-    animateOutlineEdgeStrength(start, end, duration, onComplete) {
-        if (!this.outlineEffect) return;
-        const startTime = performance.now();
-        const animate = () => {
-            const now = performance.now();
-            const t = Math.min((now - startTime) / duration, 1);
-            this.outlineEffect.edgeStrength = start + (end - start) * t;
-            if (t < 1) {
-                requestAnimationFrame(animate);
-            } else {
-                this.outlineEffect.edgeStrength = end;
-                if (onComplete) onComplete();
-            }
-        };
-        animate();
     }
 }
 
