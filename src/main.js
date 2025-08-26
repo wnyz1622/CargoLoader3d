@@ -292,6 +292,8 @@ class HotspotManager {
         });
         this.setupFullscreenButton();
         this.setupResetButton();
+        this.setupTechSpecToggle();
+        this.setupPDFButton();
 
         // Performance monitoring setup
         if (!IS_MOBILE) {
@@ -1490,6 +1492,133 @@ class HotspotManager {
             if (icon) {
                 icon.src = 'media/Reset_default.svg';
             }
+        });
+    }
+
+    setupTechSpecToggle() {
+        const button = document.getElementById('techSpecBtn');
+        const icon = document.getElementById('techSpecIcon');
+        const modal = document.getElementById('specModal');
+        const content = document.getElementById('specContent');
+        const closeIcon = document.getElementById('closeSpecIcon');
+
+        let isVisible = false;
+
+        // Recursive renderer for nested spec objects
+        const renderSpecs = (obj, container, level = 0) => {
+            for (const [key, value] of Object.entries(obj)) {
+                // Handle arrays (like Power Module, Electrical, etc.)
+                if (Array.isArray(value)) {
+                    const section = document.createElement(level === 0 ? 'h2' : 'h3');
+                    section.className = 'spec-section';
+                    section.textContent = key;
+                    container.appendChild(section);
+
+                    value.forEach(line => {
+                        const item = document.createElement('div');
+                        item.className = 'spec-item';
+
+                        const val = document.createElement('span');
+                        val.className = 'spec-value';
+                        val.textContent = line;
+
+                        item.appendChild(val);
+                        container.appendChild(item);
+                    });
+
+                    // Handle nested objects (like Models > Standard)
+                } else if (typeof value === 'object' && value !== null) {
+                    const section = document.createElement(level === 0 ? 'h2' : 'h3');
+                    section.className = 'spec-section';
+                    section.textContent = key;
+                    container.appendChild(section);
+
+                    renderSpecs(value, container, level + 1);
+
+                    // Handle single key-value entries
+                } else {
+                    const item = document.createElement('div');
+                    item.className = 'spec-item';
+
+                    const label = document.createElement('span');
+                    label.className = 'spec-label';
+                    label.textContent = `${key}: `;
+
+                    const val = document.createElement('span');
+                    val.className = 'spec-value';
+                    val.textContent = value;
+
+                    item.appendChild(label);
+                    item.appendChild(val);
+                    container.appendChild(item);
+                }
+            }
+        };
+
+
+        const showSpecs = async () => {
+            try {
+                const response = await fetch('specs.json');
+                if (!response.ok) throw new Error('Failed to load specs.json');
+
+                const specs = await response.json();
+                content.innerHTML = '';
+                renderSpecs(specs, content);
+
+                modal.style.display = 'block';
+                icon.src = 'media/Spec_active.svg';
+                isVisible = true;
+            } catch (err) {
+                content.innerHTML = '<p>Error loading specs.</p>';
+                modal.style.display = 'block';
+                icon.src = 'media/Spec_active.svg';
+                isVisible = true;
+                console.error(err);
+            }
+        };
+
+        const hideSpecs = () => {
+            modal.style.display = 'none';
+            icon.src = 'media/Spec_default.svg';
+            isVisible = false;
+        };
+
+        button.addEventListener('click', () => {
+            if (isVisible) {
+                hideSpecs();
+            } else {
+                showSpecs();
+            }
+        });
+
+        closeIcon.addEventListener('click', hideSpecs);
+
+        button.addEventListener('mouseenter', () => {
+            if (!isVisible) icon.src = 'media/Spec_active.svg';
+        });
+
+        button.addEventListener('mouseleave', () => {
+            if (!isVisible) icon.src = 'media/Spec_default.svg';
+        });
+    }
+
+    setupPDFButton() {
+        const button = document.getElementById('pdfBtn');
+        const icon = document.getElementById('pdfIcon');
+
+        button.addEventListener('click', () => {
+            // Replace with the path to your PDF
+            const pdfUrl = 'media/Commander Loader C15i Manual.pdf';
+
+            // Open in a new tab
+            window.open(pdfUrl, '_blank');
+        });
+        // button.addEventListener('mouseenter', () => {
+        //     icon.src = 'media/PDF_active.svg';
+        // });
+
+        button.addEventListener('mouseleave', () => {
+            icon.src = 'media/PDF_default.svg';
         });
     }
 }
