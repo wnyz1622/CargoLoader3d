@@ -13,9 +13,26 @@ import Stats from 'three/examples/jsm/libs/stats.module.js';
 function isMobile() {
     return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 }
+function isDesktop() {
+    return !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+function isAndroidPhone() {
+    const ua = navigator.userAgent;
+    return /Android/i.test(ua) && /Mobile/i.test(ua);
+}
+function isAndroid() {
+    return /Android/i.test(navigator.userAgent);
+}
+window.isIOS = function () {
+    return /iPhone|iPad|iPod/i.test(navigator.userAgent);
+};
+async function supportsWebXRAR() {
+    if (!navigator.xr) return false;
+    return await navigator.xr.isSessionSupported('immersive-ar');
+}
 
 const IS_MOBILE = isMobile();
-
+let controlsUpdateTimeout = null;
 // Performance monitoring
 let frameCount = 0;
 let lastTime = performance.now();
@@ -47,12 +64,12 @@ class HotspotManager {
         this.isAnimating = false;
         this.needsUpdate = false;
         this.frameCount = 0;
-        
+
         // Performance settings
         this.LOD_DISTANCE = IS_MOBILE ? 15 : 10;
         this.CULL_DISTANCE = IS_MOBILE ? 30 : 50;
         this.targetFPS = IS_MOBILE ? 30 : 60;
-        
+
         // Simple raycast optimization
         this.raycastFrameCount = 0;
         this.raycastInterval = IS_MOBILE ? 8 : 5; // Check occlusion every N frames
@@ -117,11 +134,17 @@ class HotspotManager {
             preserveDrawingBuffer: false,
             failIfMajorPerformanceCaveat: false
         });
-        
+
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(IS_MOBILE ? 1 : Math.min(window.devicePixelRatio, 2));
         this.renderer.outputColorSpace = SRGBColorSpace;
-        
+
+        // Enable WebXR and expose renderer for ARButton logic in index.html
+        this.renderer.xr.enabled = false;
+        try { if (this.renderer.xr.setReferenceSpaceType) this.renderer.xr.setReferenceSpaceType('local'); } catch (e) { }
+        // Expose renderer so index.html can create the AR button when ready
+        window.renderer = this.renderer;
+
         // Conditional shadows and tone mapping
         if (!IS_MOBILE) {
             this.renderer.shadowMap.enabled = true;
@@ -247,7 +270,7 @@ class HotspotManager {
                 this.controls.target.y = -2.5;
             }
             this.controlsChanged = true;
-            
+
             // Throttle updates on mobile
             if (IS_MOBILE) {
                 if (controlsUpdateTimeout) clearTimeout(controlsUpdateTimeout);
@@ -294,6 +317,7 @@ class HotspotManager {
         this.setupResetButton();
         this.setupTechSpecToggle();
         this.setupPDFButton();
+        this.setupARButton();
 
         // Performance monitoring setup
         if (!IS_MOBILE) {
@@ -303,7 +327,14 @@ class HotspotManager {
         }
         // Start animation loop
         this.clock = new THREE.Clock();
-        this.animate();
+        // Setup AR helpers (reticle, hit-test, controller) and start the render loop
+        //this.setupAR();
+        if (this.renderer && this.renderer.xr && this.renderer.xr.enabled) {
+            // Use setAnimationLoop to receive XR frames (xrFrame parameter)
+            this.animate();
+        } else {
+            this.animate();
+        }
         console.log('Initialization complete');
     }
 
@@ -1201,9 +1232,9 @@ class HotspotManager {
             visibleEdgeColor: new THREE.Color('#2873F5'),
             hiddenEdgeColor: new THREE.Color('#2873F5'),
             multisampling: 2, // Reduced from 4
-            resolution: { 
-                width: window.innerWidth / 2, 
-                height: window.innerHeight / 2 
+            resolution: {
+                width: window.innerWidth / 2,
+                height: window.innerHeight / 2
             },
             xRay: false,
             kernelSize: 1,
@@ -1218,9 +1249,73 @@ class HotspotManager {
         this.composer.addPass(effectPass);
     }
 
+    // --- WebXR / AR helpers ---
+    setupAR() {
+        // Minimal AR hit-test reticle and controller placement
+        try {
+            // Reticle: ring that orients to the hit test pose
+            const geometry = new THREE.RingGeometry(0.15, 0.22, 32).rotateX(-Math.PI / 2);
+            const material = new THREE.MeshBasicMaterial({ color: 0x00ff88, side: THREE.DoubleSide });
+            this.reticle = new THREE.Mesh(geometry, material);
+            this.reticle.matrixAutoUpdate = false;
+            this.reticle.visible = false;
+            this.scene.add(this.reticle);
+
+            this.hitTestSource = null;
+            this.xrRefSpace = null;
+
+            // Controller for selecting/placing the model
+            this.controller = this.renderer.xr.getController(0);
+            this.controller.addEventListener('select', () => {
+                if (this.reticle && this.reticle.visible && this.model) {
+                    // Place the model at the reticle pose
+                    this.model.position.setFromMatrixPosition(this.reticle.matrix);
+                    const rot = new THREE.Matrix4();
+                    rot.extractRotation(this.reticle.matrix);
+                    this.model.quaternion.setFromRotationMatrix(rot);
+
+                    // Ensure the model is part of the scene (it usually is already)
+                    if (!this.scene.children.includes(this.model)) {
+                        this.scene.add(this.model);
+                    }
+                    console.log('AR: placed model at reticle');
+                }
+            });
+            this.scene.add(this.controller);
+
+            // When an XR session starts, request a hit-test source
+            this.renderer.xr.addEventListener('sessionstart', async () => {
+                // Prepare for AR: hide background, disable orbit controls
+                this.originalBackground = this.scene.background;
+                this.scene.background = null;
+                this.controls.enabled = false;
+
+                const session = this.renderer.xr.getSession();
+                try {
+                    const viewerSpace = await session.requestReferenceSpace('viewer');
+                    this.hitTestSource = await session.requestHitTestSource({ space: viewerSpace });
+                    // Use renderer's reference space (local)
+                    this.xrRefSpace = this.renderer.xr.getReferenceSpace();
+
+                    session.addEventListener('end', () => {
+                        this.hitTestSource = null;
+                        if (this.reticle) this.reticle.visible = false;
+
+                        // Restore state
+                        this.scene.background = this.originalBackground;
+                        this.controls.enabled = true;
+                    });
+                } catch (err) {
+                    console.warn('AR: hit test source request failed', err);
+                }
+            });
+        } catch (err) {
+            console.warn('AR setup failed:', err);
+        }
+    }
+
     // Optimized animation loop
-    animate() {
-        requestAnimationFrame(this.animate.bind(this));
+    animate(time, xrFrame) {
         this.controls.update();
 
         // Update hotspot positions
@@ -1232,8 +1327,27 @@ class HotspotManager {
             this.mixer.update(delta);
         }
 
+        // If we have an XR frame and a hit test source, update the reticle pose
+        if (xrFrame && this.hitTestSource && this.reticle && this.xrRefSpace) {
+            const hitTestResults = xrFrame.getHitTestResults(this.hitTestSource);
+            if (hitTestResults && hitTestResults.length > 0) {
+                const hit = hitTestResults[0];
+                const pose = hit.getPose(this.xrRefSpace);
+                if (pose) {
+                    this.reticle.visible = true;
+                    this.reticle.matrix.fromArray(pose.transform.matrix);
+                }
+            } else if (this.reticle) {
+                this.reticle.visible = false;
+            }
+        }
+
         // Render using composer (postprocessing) if not mobile, otherwise direct render
-        if (!IS_MOBILE && this.composer) {
+        const isXRPresenting = this.renderer.xr && this.renderer.xr.isPresenting;
+        if (isXRPresenting) {
+            // Use the renderer directly in XR mode
+            this.renderer.render(this.scene, this.camera);
+        } else if (!IS_MOBILE && this.composer) {
             this.composer.render();
         } else {
             this.renderer.render(this.scene, this.camera);
@@ -1290,7 +1404,7 @@ class HotspotManager {
             const y = (-screenPosition.y + 1) * window.innerHeight / 2;
 
             // Raycast to detect occlusion
-             //Increase the Tolerance to be less senstive, show less hidden callouts
+            //Increase the Tolerance to be less senstive, show less hidden callouts
 
             const direction = worldPosition.clone().sub(this.camera.position).normalize();
             this.raycaster.set(this.camera.position, direction);
@@ -1301,7 +1415,7 @@ class HotspotManager {
 
             // Update visibility using opacity transition
             const shouldShow = !(isBehindCamera || !isInView || isOccluded);
-            
+
             // Clean on/off visibility - no transparency
             hotspot.element.style.opacity = shouldShow ? '1' : '0';
             hotspot.element.style.pointerEvents = shouldShow ? 'auto' : 'none';
@@ -1309,7 +1423,7 @@ class HotspotManager {
             // Update position only if significantly changed (reduce DOM updates)
             const currentLeft = parseInt(hotspot.element.style.left) || 0;
             const currentTop = parseInt(hotspot.element.style.top) || 0;
-            
+
             if (Math.abs(currentLeft - x) > 1 || Math.abs(currentTop - y) > 1) {
                 hotspot.element.style.left = `${x}px`;
                 hotspot.element.style.top = `${y}px`;
@@ -1353,7 +1467,7 @@ class HotspotManager {
         // Update composer if exists
         if (this.composer) {
             this.composer.setSize(window.innerWidth, window.innerHeight);
-            
+
             // Update outline effect resolution
             if (this.outlineEffect && this.outlineEffect.resolution) {
                 this.outlineEffect.resolution.width = window.innerWidth * pixelRatio;
@@ -1369,9 +1483,9 @@ class HotspotManager {
             console.warn('Fullscreen button not found');
             return;
         }
-        
+
         const icon = button.querySelector('img');
-        
+
         button.addEventListener('click', () => {
             if (!document.fullscreenElement) {
                 document.documentElement.requestFullscreen().catch(err => {
@@ -1385,7 +1499,7 @@ class HotspotManager {
         // Update button icon on fullscreen state change
         document.addEventListener('fullscreenchange', () => {
             if (icon) {
-                icon.src = document.fullscreenElement 
+                icon.src = document.fullscreenElement
                     ? 'media/Fullscreen_acitve.svg'
                     : 'media/Fullscreen_default.svg';
             }
@@ -1411,7 +1525,7 @@ class HotspotManager {
             console.warn('Reset button not found');
             return;
         }
-        
+
         const icon = document.getElementById('resetIcon');
 
         button.addEventListener('click', () => {
@@ -1425,7 +1539,7 @@ class HotspotManager {
                 const startTarget = this.controls.target.clone();
                 const duration = 2000;
                 const startTime = Date.now();
-                
+
                 const animateReset = () => {
                     const elapsed = Date.now() - startTime;
                     const t = Math.min(elapsed / duration, 1);
@@ -1442,7 +1556,7 @@ class HotspotManager {
 
             // Clear any selected hotspot
             if (this.selectedHotspot) {
-                this.selectedHotspot.element.style.backgroundImage = 
+                this.selectedHotspot.element.style.backgroundImage =
                     this.selectedHotspot.data.type === 'animation'
                         ? `url('media/door_visited.png')`
                         : `url('media/Info_visited.png')`;
@@ -1617,11 +1731,110 @@ class HotspotManager {
         //     icon.src = 'media/PDF_active.svg';
         // });
 
+        button.addEventListener('mouseenter', () => {
+            icon.src = 'media/PDF_active.svg';
+        });
+
         button.addEventListener('mouseleave', () => {
             icon.src = 'media/PDF_default.svg';
         });
     }
-}
 
+    setupARButton() {
+
+        const arBtn = document.getElementById("arBtn");
+        const qrModal = document.getElementById("arQRModal");
+        const closeQR = document.getElementById("closeQR");
+        const icon = document.getElementById('arIcon');
+
+        if (!arBtn) return;
+
+        // Close QR
+        closeQR.onclick = () => {
+            qrModal.style.display = "none";
+            this.controls.enabled = true;
+        };
+
+        arBtn.addEventListener("click", async () => {
+
+            // 1️⃣ Desktop → ONLY QR (never attempt XR)
+            if (!isMobile()) {
+                qrModal.style.display = "flex";
+                this.controls.enabled = false;
+
+                const qr = document.getElementById("qrcode");
+                qr.innerHTML = "";
+
+                new QRCode(qr, {
+                    text: window.location.href,
+                    width: 220,
+                    height: 220
+                });
+                return;
+            }
+
+            // 2️⃣ iPhone → USDZ QuickLook
+            if (isIOS()) {
+                document.getElementById("ios-ar-link").click();
+                return;
+            }
+
+            // 3️⃣ Android → WebXR
+            // Only Android phones are allowed to try WebXR
+            if (!isAndroidPhone()) {
+                alert("AR is supported on Android Chrome or iPhone Safari.");
+                return;
+            }
+
+            // Now (and only now) check XR capability
+            const canAR = await supportsWebXRAR();
+            if (!canAR) {
+                alert("AR not supported on this device/browser.");
+                return;
+            }
+            this.renderer.xr.enabled = true;
+            this.setupAR();
+            const session = await navigator.xr.requestSession("immersive-ar", {
+                requiredFeatures: ["hit-test"]
+            });
+
+            this.renderer.xr.setSession(session);
+
+            session.addEventListener("end", () => {
+                console.log("Returned to 3D viewer");
+            });
+        });
+
+        arBtn.addEventListener('mouseenter', () => {
+            if (icon) {
+                icon.src = 'media/AR_active.svg';
+            }
+        });
+        arBtn.addEventListener('mouseleave', () => {
+            if (icon) {
+                icon.src = 'media/AR_default.svg';
+            }
+        });
+    }
+}
+if (import.meta.hot) {
+    import.meta.hot.dispose(() => {
+        console.log("Disposing previous Three.js instance");
+
+        if (window.__HOTSPOT_APP__) {
+            try {
+                window.__HOTSPOT_APP__.renderer.dispose();
+                window.__HOTSPOT_APP__.renderer.forceContextLoss();
+            } catch (e) { }
+
+            const canvas = document.querySelector("canvas");
+            if (canvas) canvas.remove();
+
+            window.__HOTSPOT_APP__ = null;
+        }
+    });
+}
 // Initialize the application
-new HotspotManager();
+if (!window.__HOTSPOT_APP__) {
+    window.__HOTSPOT_APP__ = new HotspotManager();
+}
