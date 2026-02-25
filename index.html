@@ -41,9 +41,13 @@
         <button id="resetBtn" title="Reset View" class="icon-button reset-btn">
             <img id="resetIcon" src="media/Reset_default.svg" alt="Reset">
         </button>
+        <button id="arBtn" class="icon-button ar-btn" title="Start AR">
+            <img id="arIcon" src="media/AR_default.svg" alt="AR View" />
+        </button>
         <button id="fullscreenBtn" class="icon-button fullscreen-btn" title="Fullscreen">
             <img src="media/Fullscreen_default.svg" alt="Fullscreen" />
         </button>
+
 
 
     </div>
@@ -75,7 +79,19 @@
 }
 </script>
 
-    <script type="module" src="src/main.js"></script>
+       <script type="module" src="src/main.js"></script>
+    <a id="ios-ar-link" rel="ar" href="media/model/Premade_Pouch_Packaging_Machine_Powder.usdz"></a>
+    <!-- AR QR Modal -->
+    <div id="arQRModal" class="ar-qr-modal">
+        <div class="ar-qr-box">
+            <p>View in your space</p>
+            <p>Scan with your phone</p>
+            <div id="qrcode"></div>
+            <button id="closeQR">Close</button>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </body>
 
 </html>
