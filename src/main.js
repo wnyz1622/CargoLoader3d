@@ -315,9 +315,12 @@ class HotspotManager {
         });
         this.setupFullscreenButton();
         this.setupResetButton();
+<<<<<<< HEAD
         this.setupTechSpecToggle();
         this.setupPDFButton();
         this.setupARButton();
+=======
+>>>>>>> parent of 982d06d (update ui info panel. optimize)
 
         // Performance monitoring setup
         if (!IS_MOBILE) {
@@ -1608,6 +1611,7 @@ class HotspotManager {
             }
         });
     }
+<<<<<<< HEAD
 
     setupTechSpecToggle() {
         const button = document.getElementById('techSpecBtn');
@@ -1739,6 +1743,9 @@ class HotspotManager {
             icon.src = 'media/PDF_default.svg';
         });
     }
+=======
+}
+>>>>>>> parent of 982d06d (update ui info panel. optimize)
 
     setupARButton() {
 
